@@ -745,7 +745,7 @@ L.Storage.JumpToLocationControl = L.Control.extend({
 
     options: {
         position: 'topleft',
-        server_url: 'https://open.mapquestapi.com/nominatim/v1/search.php'
+        server_url: '//nominatim.openstreetmap.org/'
     },
 
     onAdd: function (map) {
