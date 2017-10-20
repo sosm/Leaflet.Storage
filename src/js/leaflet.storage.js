@@ -50,14 +50,17 @@ L.Map.mergeOptions({
 
 L.Storage.Map.include({
 
-    HIDDABLE_CONTROLS: ['zoom', 'search', 'fullscreen', 'embed', 'locate', 'measure', 'tilelayers', 'editinosm', 'home', 'datalayers'],
+    HIDDABLE_CONTROLS: ['zoom', 'search', 'fullscreen', 'embed', 'locate', 'measure', 'tilelayers', 'editinosm', 'datalayers'],
 
     initialize: function (el, geojson) {
 
         if (geojson.properties && geojson.properties.locale) L.setLocale(geojson.properties.locale);
 
+        // Don't let default autocreation of controls
         var zoomControl = typeof geojson.properties.zoomControl !== 'undefined' ? geojson.properties.zoomControl : true;
         geojson.properties.zoomControl = false;
+        var fullscreenControl = typeof geojson.properties.fullscreenControl !== 'undefined' ? geojson.properties.fullscreenControl : true;
+        geojson.properties.fullscreenControl = false;
         L.Util.setBooleanFromQueryString(geojson.properties, 'scrollWheelZoom');
         L.Map.prototype.initialize.call(this, el, geojson.properties);
 
@@ -76,6 +79,7 @@ L.Storage.Map.include({
         this.demoTileInfos = this.options.demoTileInfos;
         if (geojson.geometry) this.options.center = geojson.geometry;
         this.options.zoomControl = zoomControl;
+        this.options.fullscreenControl = fullscreenControl;
         L.Util.setBooleanFromQueryString(this.options, 'moreControl');
         L.Util.setBooleanFromQueryString(this.options, 'scaleControl');
         L.Util.setBooleanFromQueryString(this.options, 'miniMap');
@@ -117,14 +121,20 @@ L.Storage.Map.include({
         this.handleLimitBounds();
 
         this.initTileLayers(this.options.tilelayers);
-        this.initControls();
 
         // Global storage for retrieving datalayers
         this.datalayers = {};
         this.datalayers_index = [];
         this.dirty_datalayers = [];
+
+        // Retrocompat
+        if (this.options.slideshow && this.options.slideshow.delay && this.options.slideshow.active === undefined) this.options.slideshow.active = true;
+
+        this.initControls();
+
         // create datalayers
         this.initDatalayers();
+
         if (this.options.displayCaptionOnLoad) {
             // Retrocompat
             if (!this.options.onLoadPanel) {
@@ -139,8 +149,10 @@ L.Storage.Map.include({
             }
             delete this.options.displayDataBrowserOnLoad;
         }
-        if (this.options.onLoadPanel === 'databrowser') this.openBrowser();
-        else if (this.options.onLoadPanel === 'caption') this.displayCaption();
+        this.onceDatalayersLoaded(function () {
+            if (this.options.onLoadPanel === 'databrowser') this.openBrowser();
+            else if (this.options.onLoadPanel === 'caption') this.displayCaption();
+        });
 
         this.ui.on('panel:closed', function () {
             this.invalidateSize({pan: false});
@@ -230,7 +242,6 @@ L.Storage.Map.include({
         }
         this._controls.zoom = new L.Control.Zoom({zoomInTitle: L._('Zoom in'), zoomOutTitle: L._('Zoom out')});
         this._controls.datalayers = new L.Storage.DataLayersControl(this);
-        this._controls.home = new L.S.HomeControl();
         this._controls.locate = new L.S.LocateControl();
         this._controls.fullscreen = new L.Control.Fullscreen({title: {'false': L._('View Fullscreen'), 'true': L._('Exit Fullscreen')}});
         this._controls.search = new L.Storage.SearchControl();
@@ -240,7 +251,7 @@ L.Storage.Map.include({
             position: 'topleft',
             widgetOptions: {helpText: L._('Open this map extent in a map editor to provide more accurate data to OpenStreetMap')}
         });
-        this._controls.measure = new L.MeasureControl();
+        this._controls.measure = (new L.MeasureControl()).initHandler(this);
         this._controls.more = new L.S.MoreControls();
         this._controls.scale = L.control.scale();
         if (this.options.scrollWheelZoom) this.scrollWheelZoom.enable();
@@ -249,8 +260,8 @@ L.Storage.Map.include({
     },
 
     renderControls: function () {
-        L.DomUtil.classIf(document.body, 'storage-caption-bar-enabled', this.options.captionBar || (this.options.slideshow && (this.options.slideshow.delay || this.options.slideshow.autoplay)));
-        L.DomUtil.classIf(document.body, 'storage-slideshow-enabled', this.options.slideshow && (this.options.slideshow.delay || this.options.slideshow.autoplay));
+        L.DomUtil.classIf(document.body, 'storage-caption-bar-enabled', this.options.captionBar || (this.options.slideshow && this.options.slideshow.active));
+        L.DomUtil.classIf(document.body, 'storage-slideshow-enabled', this.options.slideshow && this.options.slideshow.active);
         for (var i in this._controls) {
             this.removeControl(this._controls[i]);
         }
@@ -282,8 +293,8 @@ L.Storage.Map.include({
     initDatalayers: function () {
         var toload = 0, datalayer, seen = 0, self = this;
         var loaded = function () {
-            self.fire('datalayersloaded');
             self.datalayersLoaded = true;
+            self.fire('datalayersloaded');
         };
         var decrementToLoad = function () {
             toload--;
@@ -293,7 +304,8 @@ L.Storage.Map.include({
             toload++;
             seen++;
             datalayer = this.createDataLayer(this.options.datalayers[j]);
-            datalayer.onceLoaded(decrementToLoad);
+            if (datalayer.displayedOnLoad()) datalayer.onceLoaded(decrementToLoad);
+            else decrementToLoad();
         }
         if (seen === 0) loaded();  // no datalayer
     },
@@ -307,6 +319,7 @@ L.Storage.Map.include({
             if (!pane.dataset || !pane.dataset.id) continue;
             this.datalayers_index.push(this.datalayers[pane.dataset.id]);
         }
+        this.updateDatalayersControl();
     },
 
     ensurePanesOrder: function () {
@@ -596,10 +609,11 @@ L.Storage.Map.include({
         typeInput.name = 'format';
         var exportCaveat = L.DomUtil.add('small', 'help-text', container, L._('Only visible features will be downloaded.'));
         exportCaveat.id = 'export_caveat_text';
-        L.DomEvent.on(typeInput, 'change', function () {
+        var toggleCaveat = function () {
             if (typeInput.value === 'umap') exportCaveat.style.display = 'none';
             else exportCaveat.style.display = 'inherit';
-        }, this);
+        }
+        L.DomEvent.on(typeInput, 'change', toggleCaveat);
         var types = {
             geojson: {
                 formatter: function (map) {return JSON.stringify(map.toGeoJSON(), null, 2);},
@@ -607,7 +621,7 @@ L.Storage.Map.include({
                 filetype: 'application/json'
             },
             gpx: {
-                formatter: function (gpx) {return togpx(map.toGeoJSON());},
+                formatter: function (map) {return togpx(map.toGeoJSON());},
                 ext: '.gpx',
                 filetype: 'application/xml'
             },
@@ -617,10 +631,11 @@ L.Storage.Map.include({
                 filetype: 'application/vnd.google-earth.kml+xml'
             },
             umap: {
-                name: L._('Raw uMap data'),
+                name: L._('Full map data'),
                 formatter: function (map) {return map.serialize();},
                 ext: '.umap',
-                filetype: 'application/json'
+                filetype: 'application/json',
+                selected: true
             }
         };
         for (var key in types) {
@@ -628,8 +643,10 @@ L.Storage.Map.include({
                 option = L.DomUtil.create('option', '', typeInput);
                 option.value = key;
                 option.innerHTML = types[key].name || key;
+                if (types[key].selected) option.selected = true;
             }
         }
+        toggleCaveat();
         var download = L.DomUtil.create('a', 'button', container);
         download.innerHTML = L._('Download data');
         L.DomEvent.on(download, 'click', function () {
@@ -703,7 +720,7 @@ L.Storage.Map.include({
         var clearFlag = L.DomUtil.create('input', '', clearLabel);
         clearFlag.type = 'checkbox';
         clearFlag.name = 'clear';
-        this.eachDataLayer(function (datalayer) {
+        this.eachDataLayerReverse(function (datalayer) {
             if (datalayer.isLoaded()) {
                 var id = L.stamp(datalayer);
                 option = L.DomUtil.create('option', '', layerInput);
@@ -733,6 +750,11 @@ L.Storage.Map.include({
             var type = typeInput.value,
                 layerId = layerInput[layerInput.selectedIndex].value,
                 layer;
+            if (type === 'umap') {
+                this.once('postsync', function () {
+                    this.setView(this.latLng(this.options.center), this.options.zoom);
+                });
+            }
             if (layerId) layer = map.datalayers[layerId];
             if (layer && clearFlag.checked) layer.empty();
             if (fileInput.files.length) {
@@ -758,6 +780,7 @@ L.Storage.Map.include({
                         this.importRaw(rawInput.value, type);
                     } catch (e) {
                         this.ui.alert({content: L._('Invalid umap data'), level: 'error'});
+                        console.error(e);
                     }
                 } else {
                     if (!layer) layer = this.createDataLayer();
@@ -783,7 +806,7 @@ L.Storage.Map.include({
         this.ui.openPanel({data: {html: container}, className: 'dark'});
     },
 
-    importRaw: function(rawData){
+    importRaw: function(rawData) {
         var importedData = JSON.parse(rawData);
 
         var mustReindex = false;
@@ -796,6 +819,7 @@ L.Storage.Map.include({
             }
         }
 
+        if (importedData.geometry) this.options.center = this.latLng(importedData.geometry);
         var self = this;
         importedData.layers.forEach( function (geojson) {
             var dataLayer = self.createDataLayer();
@@ -806,8 +830,7 @@ L.Storage.Map.include({
         this.renderControls();
         this.handleLimitBounds();
         this.eachDataLayer(function (datalayer) {
-            if (mustReindex)
-                datalayer.reindex();
+            if (mustReindex) datalayer.reindex();
             datalayer.redraw();
         });
         this.fire('postsync');
@@ -823,13 +846,14 @@ L.Storage.Map.include({
             try {
                 self.importRaw(rawData);
             } catch (e) {
-                this.ui.alert({content: L._('Invalid umap data in {filename}', {filename: file.name}), level: 'error'});
+                console.error('Error importing data', e);
+                self.ui.alert({content: L._('Invalid umap data in {filename}', {filename: file.name}), level: 'error'});
             }
         };
     },
 
     openBrowser: function () {
-        this.whenReady(function () {
+        this.onceDatalayersLoaded(function () {
             this._openBrowser();
         });
     },
@@ -850,7 +874,7 @@ L.Storage.Map.include({
             description.innerHTML = L.Util.toHTML(this.options.description);
         }
         var datalayerContainer = L.DomUtil.create('div', 'datalayer-container', container);
-        this.eachDataLayer(function (datalayer) {
+        this.eachBrowsableDataLayer(function (datalayer) {
             var p = L.DomUtil.create('p', '', datalayerContainer),
                 color = L.DomUtil.create('span', 'datalayer-color', p),
                 headline = L.DomUtil.create('strong', '', p),
@@ -907,6 +931,23 @@ L.Storage.Map.include({
         }
     },
 
+    eachDataLayerReverse: function (method, context, filter) {
+        for (var i = this.datalayers_index.length - 1; i >= 0; i--) {
+            if (filter && !filter.call(context, this.datalayers_index[i])) continue;
+            method.call(context, this.datalayers_index[i]);
+        }
+    },
+
+    eachBrowsableDataLayer: function (method, context, filter) {
+        this.eachDataLayerReverse(method, context, function (d) { return d.allowBrowse(); });
+    },
+
+    findDataLayer: function (method, context) {
+        for (var i = this.datalayers_index.length - 1; i >= 0; i--) {
+            if (method.call(context, this.datalayers_index[i])) return this.datalayers_index[i];
+        }
+    },
+
     backup: function () {
         this.backupOptions();
         this._datalayers_index_bk = [].concat(this.datalayers_index);
@@ -916,11 +957,11 @@ L.Storage.Map.include({
         if (this.editTools) this.editTools.stopDrawing();
         this.resetOptions();
         this.datalayers_index = [].concat(this._datalayers_index_bk);
-        this.ensurePanesOrder();
         this.dirty_datalayers.slice().forEach(function (datalayer) {
             if (datalayer.isDeleted) datalayer.connectToMap();
             datalayer.reset();
         });
+        this.ensurePanesOrder();
         this.dirty_datalayers = [];
         this.updateDatalayersControl();
         this.initTileLayers();
@@ -995,8 +1036,8 @@ L.Storage.Map.include({
         'editinosmControl',
         'embedControl',
         'measureControl',
-        'homeControl',
-        'tilelayersControl'
+        'tilelayersControl',
+        'easing'
     ],
 
     exportOptions: function () {
@@ -1013,6 +1054,7 @@ L.Storage.Map.include({
         var umapfile = {
             type: 'umap',
             properties: this.exportOptions(),
+            geometry: this.geometry(),
             layers: []
         };
 
@@ -1085,21 +1127,16 @@ L.Storage.Map.include({
     defaultDataLayer: function () {
         var datalayer, fallback;
         datalayer = this.lastUsedDataLayer;
-        if (datalayer && !datalayer.isRemoteLayer() && datalayer.isBrowsable() && datalayer.isVisible()) {
+        if (datalayer && !datalayer.isRemoteLayer() && datalayer.canBrowse() && datalayer.isVisible()) {
             return datalayer;
         }
-        for (var i in this.datalayers) {
-            if (this.datalayers.hasOwnProperty(i)) {
-                datalayer = this.datalayers[i];
-                if (!datalayer.isRemoteLayer() && datalayer.isBrowsable()) {
-                    if (datalayer.isVisible()) {
-                        return datalayer;
-                    } else {
-                        fallback = datalayer;
-                    }
-                }
+        datalayer = this.findDataLayer(function (datalayer) {
+            if (!datalayer.isRemoteLayer() && datalayer.canBrowse()) {
+                fallback = datalayer;
+                if (datalayer.isVisible()) return true;
             }
-        }
+        });
+        if (datalayer) return datalayer;
         if (fallback) {
             // No datalayer visible, let's force one
             this.addLayer(fallback.layer);
@@ -1109,15 +1146,7 @@ L.Storage.Map.include({
     },
 
     getDataLayerByStorageId: function (storage_id) {
-        var datalayer;
-        for (var i in this.datalayers) {
-            if (this.datalayers.hasOwnProperty(i)) {
-                datalayer = this.datalayers[i];
-                if (datalayer.storage_id == storage_id) {
-                    return datalayer;
-                }
-            }
-        }
+        return this.findDataLayer(function (d) { return d.storage_id == storage_id; });
     },
 
     edit: function () {
@@ -1166,7 +1195,6 @@ L.Storage.Map.include({
         builder = new L.S.FormBuilder(this, shapeOptions, {
             callback: function (e) {
                 this.eachDataLayer(function (datalayer) {
-                    if (e.helper.field === 'options.sortKey') datalayer.reindex();
                     datalayer.redraw();
                 });
             }
@@ -1178,7 +1206,7 @@ L.Storage.Map.include({
             'options.smoothFactor',
             'options.dashArray',
             'options.zoomTo',
-            ['options.easing', {handler: 'Switch', label: L._('Advanced transition'), inheritable: true}],
+            ['options.easing', {handler: 'Switch', label: L._('Advanced transition')}],
             'options.labelKey',
             ['options.sortKey', {handler: 'BlurInput', helpEntries: 'sortKey', placeholder: L._('Default: name'), label: L._('Sort key'), inheritable: true}],
             ['options.filterKey', {handler: 'Input', helpEntries: 'filterKey', placeholder: L._('Default: name'), label: L._('Filter keys'), inheritable: true}]
@@ -1204,7 +1232,8 @@ L.Storage.Map.include({
             'options.labelInteractive'
         ];
         builder = new L.S.FormBuilder(this, popupFields, {
-            callback: function () {
+            callback: function (e) {
+                if (e.helper.field === 'options.popupTemplate' || e.helper.field === 'options.popupContentTemplate') return;
                 this.eachDataLayer(function (datalayer) {
                     datalayer.redraw();
                 })
@@ -1273,7 +1302,9 @@ L.Storage.Map.include({
 
         var slideshow = L.DomUtil.createFieldset(container, L._('Slideshow'));
         var slideshowFields = [
-            ['options.slideshow.delay', {handler: 'IntInput', placeholder: L._('Set a value for adding a slideshow'), helpText: L._('Delay between elements (in milliseconds)')}],
+            ['options.slideshow.active', {handler: 'Switch', label: L._('Activate slideshow mode')}],
+            ['options.slideshow.delay', {handler: 'SlideshowDelay', helpText: L._('Delay between two transitions when in play mode')}],
+            ['options.slideshow.easing', {handler: 'Switch', label: L._('Smart transitions'), inheritable: true}],
             ['options.slideshow.autoplay', {handler: 'Switch', label: L._('Autostart when map is loaded')}]
         ];
         var slideshowHandler = function () {
@@ -1300,18 +1331,26 @@ L.Storage.Map.include({
 
         var advancedActions = L.DomUtil.createFieldset(container, L._('Advanced actions'));
         var advancedButtons = L.DomUtil.create('div', 'button-bar', advancedActions);
-        var del = L.DomUtil.create('a', 'button half storage-delete', advancedButtons);
+        var del = L.DomUtil.create('a', 'button third storage-delete', advancedButtons);
         del.href = '#';
         del.innerHTML = L._('Delete');
         L.DomEvent
             .on(del, 'click', L.DomEvent.stop)
             .on(del, 'click', this.del, this);
-        var clone = L.DomUtil.create('a', 'button half storage-clone', advancedButtons);
+        var clone = L.DomUtil.create('a', 'button third storage-clone', advancedButtons);
         clone.href = '#';
-        clone.innerHTML = L._('Clone this map');
+        clone.innerHTML = L._('Clone');
+        clone.title = L._('Clone this map');
         L.DomEvent
             .on(clone, 'click', L.DomEvent.stop)
             .on(clone, 'click', this.clone, this);
+        var empty = L.DomUtil.create('a', 'button third storage-empty', advancedButtons);
+        empty.href = '#';
+        empty.innerHTML = L._('Empty');
+        empty.title = L._('Delete all layers');
+        L.DomEvent
+            .on(empty, 'click', L.DomEvent.stop)
+            .on(empty, 'click', this.empty, this);
         this.ui.openPanel({data: {html: container}, className: 'dark'});
     },
 
@@ -1336,6 +1375,7 @@ L.Storage.Map.include({
     initCaptionBar: function () {
         var container = L.DomUtil.create('div', 'storage-caption-bar', this._controlContainer),
             name = L.DomUtil.create('h3', '', container);
+        L.DomEvent.disableClickPropagation(container);
         if (this.options.author && this.options.author.name && this.options.author.link) {
             var authorContainer = L.DomUtil.add('span', 'storage-map-author', container, ' ' + L._('by') + ' '),
                 author = L.DomUtil.create('a');
@@ -1431,6 +1471,12 @@ L.Storage.Map.include({
             var url = L.Util.template(this.options.urls.map_clone, {'map_id': this.options.storage_id});
             this.post(url);
         }
+    },
+
+    empty: function () {
+        this.eachDataLayerReverse(function (datalayer) {
+            datalayer._delete();
+        });
     },
 
     initLoader: function () {

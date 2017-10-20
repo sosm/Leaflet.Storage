@@ -408,7 +408,6 @@ L.Storage.MoreControls = L.Control.extend({
             less = L.DomUtil.create('a', 'storage-control-less storage-control-text', container);
         more.href = '#';
         more.title = L._('More controls');
-        more.innerHTML = '🞁';
 
         L.DomEvent
             .on(more, 'click', L.DomEvent.stop)
@@ -416,7 +415,6 @@ L.Storage.MoreControls = L.Control.extend({
 
         less.href = '#';
         less.title = L._('Hide controls');
-        less.innerHTML = '🞁';
 
         L.DomEvent
             .on(less, 'click', L.DomEvent.stop)
@@ -505,11 +503,11 @@ L.Storage.DataLayersControl = L.Control.extend({
     },
 
     update: function () {
-        if (this._datalayers_container) {
+        if (this._datalayers_container && this._map) {
             this._datalayers_container.innerHTML = '';
-            for(var idx in this._map.datalayers) {
-                this.addDataLayer(this._datalayers_container, this._map.datalayers[idx]);
-            }
+            this._map.eachDataLayerReverse(function (datalayer) {
+                this.addDataLayer(this._datalayers_container, datalayer);
+            }, this)
         }
     },
 
@@ -528,7 +526,7 @@ L.Storage.DataLayersControl = L.Control.extend({
         datalayer.renderToolbox(datalayerLi);
         var title = L.DomUtil.add('span', 'layer-title', datalayerLi, datalayer.options.name);
 
-        datalayerLi.id = 'browse_data_toggle_' + datalayer.storage_id;
+        datalayerLi.id = 'browse_data_toggle_' + L.stamp(datalayer);
         L.DomUtil.classIf(datalayerLi, 'off', !datalayer.isVisible());
 
         title.innerHTML = datalayer.options.name;
@@ -542,7 +540,7 @@ L.Storage.DataLayersControl = L.Control.extend({
     openPanel: function () {
         if (!this.map.editEnabled) return;
         var container = L.DomUtil.create('ul', 'storage-browse-datalayers');
-        this.map.eachDataLayer(function (datalayer) {
+        this.map.eachDataLayerReverse(function (datalayer) {
             this.addDataLayer(container, datalayer, true);
         }, this);
         var orderable = new L.S.Orderable(container);
@@ -550,10 +548,10 @@ L.Storage.DataLayersControl = L.Control.extend({
             var layer = this.map.datalayers[e.src.dataset.id],
                 other = this.map.datalayers[e.dst.dataset.id],
                 minIndex = Math.min(e.initialIndex, e.finalIndex);
-            if (e.finalIndex === this.map.datalayers_index.length - 1) layer.bringToTop();
-            else if (e.finalIndex > e.initialIndex) other.insertBefore(layer);
-            else layer.insertBefore(other);
-            this.map.eachDataLayer(function (datalayer) {
+            if (e.finalIndex === 0) layer.bringToTop();
+            else if (e.finalIndex > e.initialIndex) layer.insertBefore(other);
+            else layer.insertAfter(other);
+            this.map.eachDataLayerReverse(function (datalayer) {
                 if (datalayer.getRank() >= minIndex) datalayer.isDirty = true;
             });
             this.map.indexDatalayers();
@@ -579,22 +577,26 @@ L.Storage.DataLayer.include({
         var toggle = L.DomUtil.create('i', 'layer-toggle', container),
             zoomTo = L.DomUtil.create('i', 'layer-zoom_to', container),
             edit = L.DomUtil.create('i', 'layer-edit show-on-edit', container),
-            table = L.DomUtil.create('i', 'layer-table-edit show-on-edit', container);
+            table = L.DomUtil.create('i', 'layer-table-edit show-on-edit', container),
+            remove = L.DomUtil.create('i', 'layer-delete show-on-edit', container);
         zoomTo.title = L._('Zoom to layer extent');
         toggle.title = L._('Show/hide layer');
         edit.title = L._('Edit');
         table.title = L._('Edit properties in a table');
+        remove.title = L._('Delete layer');
         L.DomEvent.on(toggle, 'click', this.toggle, this);
         L.DomEvent.on(zoomTo, 'click', this.zoomTo, this);
         L.DomEvent.on(edit, 'click', this.edit, this);
         L.DomEvent.on(table, 'click', this.tableEdit, this);
+        L.DomEvent.on(remove, 'click', function () {
+                    if (!this.isVisible()) return;
+                    if (!confirm(L._('Are you sure you want to delete this layer?'))) return;
+                    this._delete();
+                    this.map.ui.closePanel();
+                }, this);
         L.DomUtil.addClass(container, this.getHidableClass());
         L.DomUtil.classIf(container, 'off', !this.isVisible());
-        container.dataset.id = this._leaflet_id;
-    },
-
-    getLocalId: function () {
-        return this.storage_id || 'tmp' + L.Util.stamp(this);
+        container.dataset.id = L.stamp(this);
     },
 
     getHidableElements: function () {
@@ -602,7 +604,7 @@ L.Storage.DataLayer.include({
     },
 
     getHidableClass: function () {
-        return 'show_with_datalayer_' + this.getLocalId();
+        return 'show_with_datalayer_' + L.stamp(this);
     },
 
     propagateRemote: function () {
@@ -664,10 +666,12 @@ L.Storage.Map.include({
                 color.style.backgroundImage = 'url(' + symbol + ')';
             }
             L.DomEvent.on(zoom_to, 'click', function (e) {
-                this.bringToCenter(e, L.bind(this.view, this));
+                e.callback = this.view;
+                this.bringToCenter(e);
             }, feature);
             L.DomEvent.on(title, 'click', function (e) {
-                this.bringToCenter(e, L.bind(this.view, this));
+                e.callback = this.view
+                this.bringToCenter(e);
             }, feature);
             L.DomEvent.on(edit, 'click', function () {
                 this.edit();
@@ -706,7 +710,7 @@ L.Storage.Map.include({
         var appendAll = function () {
             featuresContainer.innerHTML = '';
             filterValue = filter.value;
-            this.eachDataLayer(function (datalayer) {
+            this.eachBrowsableDataLayer(function (datalayer) {
                 append(datalayer);
             });
         };
@@ -789,26 +793,13 @@ L.S.AttributionControl = L.Control.Attribution.extend({
             .on(link, 'click', L.DomEvent.stop)
             .on(link, 'click', this._map.displayCaption, this._map)
             .on(link, 'dblclick', L.DomEvent.stop);
+        if (window.top === window.self) {
+            // We are not in iframe mode
+            var home = L.DomUtil.add('a', '', this._container, ' — ' + L._('Home'));
+            home.href = '/';
+        }
     }
 
-});
-
-
-L.Storage.HomeControl = L.Control.extend({
-
-    options: {
-        position: 'topleft'
-    },
-
-    onAdd: function () {
-        var container = L.DomUtil.create('div', 'leaflet-control-home storage-control'),
-            link = L.DomUtil.create('a', '', container);
-
-        link.href = '/';
-        link.title = L._('Go to home page');
-
-        return container;
-    }
 });
 
 
@@ -1010,6 +1001,9 @@ L.S.IframeExporter = L.Class.extend({
         zoomControl: true,
         allowEdit: false,
         moreControl: true,
+        searchControl: null,
+        tilelayersControl: null,
+        embedControl: null,
         datalayersControl: true,
         onLoadPanel: 'none',
         captionBar: false
@@ -1070,7 +1064,12 @@ L.S.Editable = L.Editable.extend({
             if (this.map.editedFeature !== e.layer) e.layer.edit(e);
         });
         this.on('editable:editing', function (e) {
-            e.layer.isDirty = true;
+            var layer = e.layer;
+            layer.isDirty = true;
+            if (layer._tooltip && layer.isTooltipOpen()) {
+                layer._tooltip.setLatLng(layer.getCenter());
+                layer._tooltip.update();
+            }
         });
         this.on('editable:vertex:ctrlclick', function (e) {
             var index = e.vertex.getIndex();

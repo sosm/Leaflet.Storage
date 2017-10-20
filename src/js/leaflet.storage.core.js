@@ -39,6 +39,7 @@ L.Util.setNullableBooleanFromQueryString = function (options, name) {
         if (value === 'null') value = null;
         else if (value === '0' || value === 'false') value = false;
         else value = true;
+        options[name] = value;
     }
 };
 L.Util.escapeHTML = function (s) {
@@ -426,7 +427,8 @@ L.Storage.Help = L.Class.extend({
     interactive: L._('If false, the polygon will act as a part of the underlying map.'),
     outlink: L._('Define link to open in a new window on polygon click.'),
     dynamicRemoteData: L._('Fetch data each time map view changes.'),
-    proxyRemoteData: L._('To use if remote server doesn\'t allow cross domain (slower)')
+    proxyRemoteData: L._('To use if remote server doesn\'t allow cross domain (slower)'),
+    browsable: L._('Set it to false to hide this layer from the slideshow, the data browser, the popup navigation…')
 });
 
 

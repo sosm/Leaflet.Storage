@@ -26,11 +26,11 @@ describe('L.DataLayer', function () {
         var editButton, form, input, forceButton;
 
         it('row in control should be active', function () {
-            assert.notOk(qs('.leaflet-control-browse #browse_data_toggle_62.off'));
+            assert.notOk(qs('.leaflet-control-browse #browse_data_toggle_' + L.stamp(this.datalayer) + '.off'));
         });
 
         it('should have edit button', function () {
-            editButton = qs('#browse_data_toggle_62 .layer-edit');
+            editButton = qs('#browse_data_toggle_' + L.stamp(this.datalayer) + ' .layer-edit');
             assert.ok(editButton);
         });
 
@@ -169,7 +169,7 @@ describe('L.DataLayer', function () {
         });
 
         it('should have edit button', function () {
-            editButton = qs('#browse_data_toggle_63 .layer-edit');
+            editButton = qs('#browse_data_toggle_' + L.stamp(newDatalayer) + ' .layer-edit');
             assert.ok(editButton);
         });
 
@@ -198,7 +198,7 @@ describe('L.DataLayer', function () {
     describe('#iconClassChange()', function () {
 
         it('should change icon class', function () {
-            happen.click(qs('.layer-edit'));
+            happen.click(qs('[data-id="' + this.datalayer._leaflet_id +'"] .layer-edit'));
             changeSelectValue(qs('form#datalayer-advanced-properties select[name=iconClass]'), 'Circle');
             assert.notOk(qs('div.storage-div-icon'));
             assert.ok(qs('div.storage-circle-icon'));
@@ -295,7 +295,7 @@ describe('L.DataLayer', function () {
 
         it('should have a delete link in update form', function () {
             enableEdit();
-            happen.click(qs('#browse_data_toggle_62 .layer-edit'));
+            happen.click(qs('#browse_data_toggle_' + L.stamp(this.datalayer) + ' .layer-edit'));
             deleteLink = qs('a.delete_datalayer_button');
             assert.ok(deleteLink);
         });
@@ -310,7 +310,7 @@ describe('L.DataLayer', function () {
         });
 
         it('should delete layer control row on delete', function () {
-            assert.notOk(qs('.leaflet-control-browse #browse_data_toggle_62'));
+            assert.notOk(qs('.leaflet-control-browse #browse_data_toggle_' + L.stamp(this.datalayer)));
         });
 
         it('should be removed from map.datalayers_index', function () {

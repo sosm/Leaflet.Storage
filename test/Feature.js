@@ -23,7 +23,7 @@ describe('L.Storage.FeatureMixin', function () {
 
         it('should take into account styles changes made in the datalayer', function () {
             enableEdit();
-            happen.click(qs('#browse_data_toggle_62 .layer-edit'));
+            happen.click(qs('#browse_data_toggle_' + L.stamp(this.datalayer) + ' .layer-edit'));
             var colorInput = qs('form#datalayer-advanced-properties input[name=color]');
             changeInputValue(colorInput, 'DarkRed');
             assert.ok(qs('path[fill="none"]')); // Polyline fill is unchanged
@@ -76,7 +76,7 @@ describe('L.Storage.FeatureMixin', function () {
         });
 
         it('should not override already set style on features', function () {
-            happen.click(qs('#browse_data_toggle_62 .layer-edit'));
+            happen.click(qs('#browse_data_toggle_' + L.stamp(this.datalayer) + ' .layer-edit'));
             changeInputValue(qs('#storage-ui-container form input[name=color]'), 'Chocolate');
             assert.notOk(qs('path[fill="DarkBlue"]'));
             assert.notOk(qs('path[fill="DarkRed"]'));
@@ -158,7 +158,7 @@ describe('L.Storage.FeatureMixin', function () {
             happen.click(qs('path[fill="DarkBlue"]'));
             happen.click(qs('ul.leaflet-inplace-toolbar a.storage-toggle-edit'));
             var select = qs('select[name=datalayer]');
-            select.selectedIndex = 1;
+            select.selectedIndex = 0;
             happen.once(select, {type: 'change'});
             assert.ok(qs('path[fill="none"]')); // Polyline fill is unchanged
             assert.notOk(qs('path[fill="DarkBlue"]'));

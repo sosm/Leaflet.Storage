@@ -319,14 +319,14 @@ i.info {
 }
 #storage-ui-container {
     width: 400px;
-    position: absolute;
+    position: fixed;
     top: 0;
     bottom: 0;
     right: -400px;
     padding: 0 20px 40px 20px;
     border-left: 1px solid #ddd;
     overflow-x: auto;
-    z-index: 1000;
+    z-index: 1010;
     background-color: #fff;
     opacity: 0.98;
     cursor: initial;
@@ -549,7 +549,7 @@ i.info {
 /*    Mobile   */
 /* *********** */
 @media all and (orientation:portrait) {
-    #storage-ui-container {
+    .storage-ui #storage-ui-container {
         height: 50%;
         max-height: 400px;
         width: 100%;

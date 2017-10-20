@@ -45,10 +45,8 @@ L.Storage.FeatureMixin = {
         return this.datalayer && this.datalayer.isRemoteLayer();
     },
 
-    view: function(latlng) {
-        if (this.map.editEnabled) {
-            return;
-        }
+    view: function(e) {
+        if (this.map.editEnabled) return;
         var outlink = this.properties._storage_options.outlink,
             target = this.properties._storage_options.outlinkTarget
         if (outlink) {
@@ -66,13 +64,11 @@ L.Storage.FeatureMixin = {
         }
         if (this.map.slideshow) this.map.slideshow.current = this;
         this.attachPopup();
-        this.openPopup(latlng || this.getCenter());
+        this.openPopup(e && e.latlng || this.getCenter());
     },
 
     openPopup: function () {
-        if (this.map.editEnabled) {
-            return;
-        }
+        if (this.map.editEnabled) return;
         this.parentClass.prototype.openPopup.apply(this, arguments);
     },
 
@@ -157,9 +153,10 @@ L.Storage.FeatureMixin = {
 
     endEdit: function () {},
 
-    getDisplayName: function () {
+    getDisplayName: function (fallback) {
+        if (fallback === undefined) fallback = this.datalayer.options.name;
         var key = this.getOption('labelKey') || 'name';
-        return this.properties[key] || this.properties.title || this.datalayer.options.name;
+        return this.properties[key] || this.properties.title || fallback;
     },
 
     hasPopupFooter: function () {
@@ -196,7 +193,6 @@ L.Storage.FeatureMixin = {
 
     connectToDataLayer: function (datalayer) {
         this.datalayer = datalayer;
-        this.options.pane = this.datalayer.pane;
         this.options.renderer = this.datalayer.renderer;
     },
 
@@ -208,7 +204,6 @@ L.Storage.FeatureMixin = {
 
     populate: function (feature) {
         this.properties = L.extend({}, feature.properties);
-        this.options.title = feature.properties && feature.properties.name;
         this.properties._storage_options = L.extend({}, this.properties._storage_options);
         // Retrocompat
         if (this.properties._storage_options.clickable === false) {
@@ -244,18 +239,18 @@ L.Storage.FeatureMixin = {
         return value;
     },
 
-    bringToCenter: function (e, callback) {
-        var latlng;
-        if (e && e.zoomTo) this.map._zoom = e.zoomTo;
-        if (e && e.latlng) latlng = e.latlng;
-        else latlng = this.getCenter();
-        this.map.panTo(latlng);
-        if (callback) callback();
+    bringToCenter: function (e) {
+        e = e || {};
+        var latlng = e.latlng || this.getCenter();
+        this.map.setView(latlng, e.zoomTo || this.map.getZoom());
+        if (e.callback) e.callback.call(this);
     },
 
-    zoomTo: function () {
-        if (this.map.options.easing) this.flyTo();
-        else this.bringToCenter({zoomTo: this.getBestZoom()});
+    zoomTo: function (e) {
+        e = e || {};
+        var easing = e.easing !== undefined ? e.easing : this.map.options.easing;
+        if (easing) this.flyTo();
+        else this.bringToCenter({zoomTo: this.getBestZoom(), callback: e.callback});
     },
 
     getBestZoom: function () {
@@ -308,7 +303,7 @@ L.Storage.FeatureMixin = {
         if (this.map.measureTools && this.map.measureTools.enabled()) return;
         this._popupHandlersAdded = true;  // Prevent leaflet from managing event
         if(!this.map.editEnabled) {
-            this.view(e.latlng);
+            this.view(e);
         } else if (!this.isReadOnly()) {
             if(e.originalEvent.shiftKey) {
                 if(this._toggleEditing)
@@ -396,14 +391,14 @@ L.Storage.FeatureMixin = {
     },
 
     resetTooltip: function () {
-        var displayName = this.getDisplayName(),
+        var displayName = this.getDisplayName(null),
             options = {
                 permanent: !this.getOption('labelHover'),
                 direction: this.getOption('labelDirection'),
                 interactive: this.getOption('labelInteractive')
             };
+        this.unbindTooltip();
         if (this.getOption('showLabel') && displayName) this.bindTooltip(L.Util.escapeHTML(displayName), options);
-        else this.unbindTooltip();
     },
 
     matchFilter: function (filter, keys) {
@@ -497,9 +492,7 @@ L.Storage.Marker = L.Marker.extend({
     },
 
     _getIconUrl: function (name) {
-        if (typeof name === 'undefined') {
-            name = 'icon';
-        }
+        if (typeof name === 'undefined') name = 'icon';
         return this.getOption(name + 'Url');
     },
 
@@ -551,12 +544,12 @@ L.Storage.Marker = L.Marker.extend({
         fieldset.appendChild(builder.build());
     },
 
-    bringToCenter: function (e, callback) {
-        callback = callback || function (){};  // mandatory for zoomToShowLayer
+    bringToCenter: function (e) {
         if (this.datalayer.isClustered() && !this._icon) {
-            this.datalayer.layer.zoomToShowLayer(this, callback);
+            // callback is mandatory for zoomToShowLayer
+            this.datalayer.layer.zoomToShowLayer(this, e.callback || function (){});
         } else {
-            L.Storage.FeatureMixin.bringToCenter.call(this, e, callback);
+            L.Storage.FeatureMixin.bringToCenter.call(this, e);
         }
     },
 
@@ -573,6 +566,12 @@ L.Storage.Marker = L.Marker.extend({
 
 
 L.Storage.PathMixin = {
+
+    connectToDataLayer: function (datalayer) {
+        L.S.FeatureMixin.connectToDataLayer.call(this, datalayer);
+        // We keep markers on their own layer on top of the paths.
+        this.options.pane = this.datalayer.pane;
+    },
 
     edit: function (e) {
         if(this.map.editEnabled) {
@@ -712,6 +711,13 @@ L.Storage.PathMixin = {
 
     getContextMenuItems: function (e) {
         var items = L.S.FeatureMixin.getContextMenuItems.call(this, e);
+        items.push({
+            text: L._('Display measure'),
+            callback: function () {
+                this.map.ui.alert({content: this.getMeasure(), level: 'info'})
+            },
+            context: this
+        })
         if (this.map.editEnabled && !this.isReadOnly() && this.isMulti()) {
             items = items.concat(this.getContextMenuMultiItems(e));
         }
